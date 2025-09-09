@@ -16,12 +16,18 @@ export const api = {
   },
 
   // Code execution
-  executeCode: async (code: string, language: string, roomId: string) => {
+  executeCode: async (code: string, language: string, roomId: string, filename?: string) => {
     const response = await fetch(`${API_BASE_URL}/execute`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, language, roomId })
+      body: JSON.stringify({ code, language, roomId, filename })
     });
+    return response.json();
+  },
+
+  // Get supported languages
+  getSupportedLanguages: async () => {
+    const response = await fetch(`${API_BASE_URL}/languages`);
     return response.json();
   },
 

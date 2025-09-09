@@ -9,8 +9,10 @@ import { api } from './utils/api';
 
 interface FileItem {
   name: string;
+  path: string;
   content: string;
-  type: 'file';
+  type: 'file' | 'directory';
+  children?: { [key: string]: FileItem };
   createdAt?: Date;
 }
 
@@ -54,46 +56,61 @@ function App() {
     // File synchronization
     socket.on('files-sync', (syncedFiles: { [key: string]: FileItem }) => {
       setFiles(syncedFiles);
-      if (Object.keys(syncedFiles).length > 0 && !currentFile) {
-        setCurrentFile(Object.keys(syncedFiles)[0]);
+      // Find first file in the directory structure
+      const firstFile = findFirstFile(syncedFiles);
+      if (firstFile && !currentFile) {
+        setCurrentFile(firstFile);
       }
     });
 
     // Real-time code updates
-    socket.on('code-update', ({ fileName, content }) => {
-      setFiles(prev => ({
-        ...prev,
-        [fileName]: { ...prev[fileName], content }
-      }));
-    });
-
-    // File operations
-    socket.on('file-created', ({ fileName, file }) => {
-      setFiles(prev => ({ ...prev, [fileName]: file }));
-    });
-
-    socket.on('file-deleted', ({ fileName }) => {
+    socket.on('code-update', ({ filePath, content }) => {
       setFiles(prev => {
         const newFiles = { ...prev };
-        delete newFiles[fileName];
-        if (currentFile === fileName) {
-          const remainingFiles = Object.keys(newFiles);
-          setCurrentFile(remainingFiles.length > 0 ? remainingFiles[0] : null);
+        const file = getFileFromPath(newFiles, filePath);
+        if (file && file.type === 'file') {
+          file.content = content;
         }
         return newFiles;
       });
     });
 
-    socket.on('file-renamed', ({ oldName, newName }) => {
+    // File operations
+    socket.on('file-created', ({ filePath, file }) => {
       setFiles(prev => {
         const newFiles = { ...prev };
-        newFiles[newName] = { ...newFiles[oldName], name: newName };
-        delete newFiles[oldName];
+        setFileAtPath(newFiles, filePath, file);
+        return newFiles;
+      });
+    });
+
+    socket.on('file-deleted', ({ filePath }) => {
+      setFiles(prev => {
+        const newFiles = { ...prev };
+        deleteFileAtPath(newFiles, filePath);
+        if (currentFile === filePath) {
+          const firstFile = findFirstFile(newFiles);
+          setCurrentFile(firstFile);
+        }
+        return newFiles;
+      });
+    });
+
+    socket.on('file-renamed', ({ oldPath, newPath }) => {
+      setFiles(prev => {
+        const newFiles = { ...prev };
+        const file = getFileFromPath(newFiles, oldPath);
+        if (file) {
+          const newName = newPath.split('/').pop() || '';
+          const updatedFile = { ...file, name: newName, path: newPath };
+          deleteFileAtPath(newFiles, oldPath);
+          setFileAtPath(newFiles, newPath, updatedFile);
+        }
         return newFiles;
       });
       
-      if (currentFile === oldName) {
-        setCurrentFile(newName);
+      if (currentFile === oldPath) {
+        setCurrentFile(newPath);
       }
     });
 
@@ -142,6 +159,91 @@ function App() {
     };
   }, [socket, currentFile, users]);
 
+  // Helper functions for file system operations
+  const findFirstFile = (files: { [key: string]: FileItem }): string | null => {
+    const rootDir = files['/'];
+    if (!rootDir || !rootDir.children) return null;
+    
+    const findFile = (children: { [key: string]: FileItem }): string | null => {
+      for (const child of Object.values(children)) {
+        if (child.type === 'file') {
+          return child.path;
+        } else if (child.type === 'directory' && child.children) {
+          const found = findFile(child.children);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    
+    return findFile(rootDir.children);
+  };
+
+  const getFileFromPath = (files: { [key: string]: FileItem }, filePath: string): FileItem | null => {
+    const parts = filePath.split('/').filter(part => part !== '');
+    let current = files['/'];
+    
+    for (const part of parts) {
+      if (current && current.children && current.children[part]) {
+        current = current.children[part];
+      } else {
+        return null;
+      }
+    }
+    
+    return current;
+  };
+
+  const setFileAtPath = (files: { [key: string]: FileItem }, filePath: string, fileData: FileItem) => {
+    const parts = filePath.split('/').filter(part => part !== '');
+    const fileName = parts.pop();
+    
+    let current = files['/'];
+    
+    // Navigate to parent directory
+    for (const part of parts) {
+      if (!current.children) current.children = {};
+      if (!current.children[part]) {
+        current.children[part] = {
+          name: part,
+          path: current.path === '/' ? `/${part}` : `${current.path}/${part}`,
+          type: 'directory',
+          children: {}
+        };
+      }
+      current = current.children[part];
+    }
+    
+    // Set the file
+    if (fileName && current.children) {
+      current.children[fileName] = fileData;
+    }
+  };
+
+  const deleteFileAtPath = (files: { [key: string]: FileItem }, filePath: string) => {
+    const parts = filePath.split('/').filter(part => part !== '');
+    const fileName = parts.pop();
+    
+    let current = files['/'];
+    
+    // Navigate to parent directory
+    for (const part of parts) {
+      if (current.children && current.children[part]) {
+        current = current.children[part];
+      } else {
+        return false;
+      }
+    }
+    
+    // Delete the file
+    if (fileName && current.children && current.children[fileName]) {
+      delete current.children[fileName];
+      return true;
+    }
+    
+    return false;
+  };
+
   // Room management functions
   const createRoom = useCallback(async () => {
     setIsLoading(true);
@@ -185,42 +287,77 @@ function App() {
   }, [socket]);
 
   // File operations
-  const handleFileSelect = useCallback((fileName: string) => {
-    setCurrentFile(fileName);
+  const handleFileSelect = useCallback((filePath: string) => {
+    setCurrentFile(filePath);
   }, []);
 
-  const handleFileCreate = useCallback((fileName: string) => {
+  const handleFileCreate = useCallback((filePath: string, type: 'file' | 'directory' = 'file') => {
     if (!socket || !roomId) return;
     
+    let content = '';
+    if (type === 'file') {
+      const extension = filePath.split('.').pop()?.toLowerCase();
+      switch (extension) {
+        case 'py':
+          content = `# New Python file\nprint("Hello, World!")`;
+          break;
+        case 'java':
+          const className = filePath.split('/').pop()?.replace('.java', '') || 'Main';
+          content = `public class ${className} {\n    public static void main(String[] args) {\n        System.out.println("Hello, World!");\n    }\n}`;
+          break;
+        case 'cpp':
+        case 'cxx':
+        case 'cc':
+          content = `#include <iostream>\n\nint main() {\n    std::cout << "Hello, World!" << std::endl;\n    return 0;\n}`;
+          break;
+        case 'c':
+          content = `#include <stdio.h>\n\nint main() {\n    printf("Hello, World!\\n");\n    return 0;\n}`;
+          break;
+        case 'go':
+          content = `package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("Hello, World!")\n}`;
+          break;
+        case 'rs':
+          content = `fn main() {\n    println!("Hello, World!");\n}`;
+          break;
+        default:
+          content = `// New file: ${filePath.split('/').pop()}\nconsole.log("Hello, World!");`;
+      }
+    }
+    
     socket.emit('create-file', { 
-      fileName, 
-      content: `// New file: ${fileName}\n`, 
+      filePath, 
+      content,
+      type,
       roomId 
     });
   }, [socket, roomId]);
 
-  const handleFileDelete = useCallback((fileName: string) => {
+  const handleFileDelete = useCallback((filePath: string) => {
     if (!socket || !roomId) return;
     
-    socket.emit('delete-file', { fileName, roomId });
+    socket.emit('delete-file', { filePath, roomId });
   }, [socket, roomId]);
 
-  const handleFileRename = useCallback((oldName: string, newName: string) => {
+  const handleFileRename = useCallback((oldPath: string, newPath: string) => {
     if (!socket || !roomId) return;
     
-    socket.emit('rename-file', { oldName, newName, roomId });
+    socket.emit('rename-file', { oldPath, newPath, roomId });
   }, [socket, roomId]);
 
   // Code editing
   const handleCodeChange = useCallback((content: string) => {
     if (!currentFile || !socket || !roomId) return;
     
-    setFiles(prev => ({
-      ...prev,
-      [currentFile]: { ...prev[currentFile], content }
-    }));
+    setFiles(prev => {
+      const newFiles = { ...prev };
+      const file = getFileFromPath(newFiles, currentFile);
+      if (file && file.type === 'file') {
+        file.content = content;
+      }
+      return newFiles;
+    });
     
-    socket.emit('code-change', { fileName: currentFile, content, roomId });
+    socket.emit('code-change', { filePath: currentFile, content, roomId });
   }, [currentFile, socket, roomId]);
 
   const handleCursorChange = useCallback((position: any) => {
@@ -230,14 +367,14 @@ function App() {
   }, [socket, roomId]);
 
   // Code execution
-  const handleCodeExecute = useCallback(async (code: string, language: string) => {
+  const handleCodeExecute = useCallback(async (code: string, language: string, filename?: string) => {
     if (!roomId) return;
     
     setIsExecuting(true);
     setTerminalOutput(prev => [...prev, `> Executing ${language} code...`]);
     
     try {
-      const result = await api.executeCode(code, language, roomId);
+      const result = await api.executeCode(code, language, roomId, filename);
       setTerminalOutput(prev => [...prev, result.output]);
     } catch (error) {
       setTerminalOutput(prev => [...prev, `❌ Execution failed: ${error}`]);
@@ -319,13 +456,14 @@ function App() {
           {currentFile ? (
             <>
               <div className="bg-gray-200 px-4 py-2 border-b border-gray-300 flex items-center gap-2">
-                <span className="text-sm font-medium">{currentFile}</span>
+                <span className="text-sm font-medium">{currentFile.split('/').pop()}</span>
+                <span className="text-xs text-gray-500">{currentFile}</span>
                 <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
               </div>
               <div className="flex-1">
                 <CodeEditor
-                  fileName={currentFile}
-                  content={files[currentFile]?.content || ''}
+                  fileName={currentFile.split('/').pop() || ''}
+                  content={getFileFromPath(files, currentFile)?.content || ''}
                   language="javascript"
                   onChange={handleCodeChange}
                   onCursorChange={handleCursorChange}

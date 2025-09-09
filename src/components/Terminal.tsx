@@ -1,10 +1,10 @@
 import React, { useRef, useEffect } from 'react';
-import { Terminal as TerminalIcon, Play, Loader } from 'lucide-react';
+import { Terminal as TerminalIcon, Play, Loader, Code } from 'lucide-react';
 
 interface TerminalProps {
   output: string[];
   isExecuting: boolean;
-  onExecute: (code: string, language: string) => void;
+  onExecute: (code: string, language: string, filename?: string) => void;
   currentFile: string | null;
   files: { [key: string]: any };
 }
@@ -25,24 +25,91 @@ const Terminal: React.FC<TerminalProps> = ({
   }, [output]);
 
   const handleExecute = () => {
-    if (!currentFile || !files[currentFile]) {
+    if (!currentFile) {
       return;
     }
 
-    const file = files[currentFile];
+    // Find the file in the nested structure
+    const file = findFileByPath(files, currentFile);
+    if (!file || file.type !== 'file') {
+      return;
+    }
+
     const extension = currentFile.split('.').pop()?.toLowerCase();
     
     let language = 'javascript';
-    if (extension === 'py') {
+    switch (extension) {
+      case 'py':
+        language = 'python';
+        break;
+      case 'java':
+        language = 'java';
+        break;
+      case 'cpp':
+      case 'cxx':
+      case 'cc':
+        language = 'cpp';
+        break;
+      case 'c':
+        language = 'c';
+        break;
+      case 'go':
+        language = 'go';
+        break;
+      case 'rs':
+        language = 'rust';
+        break;
+      default:
+        language = 'javascript';
+    }
       language = 'python';
     }
 
-    onExecute(file.content, language);
+    onExecute(file.content, language, currentFile);
+  };
+
+  const findFileByPath = (files: any, path: string): any => {
+    const parts = path.split('/').filter(part => part !== '');
+    let current = files['/'];
+    
+    for (const part of parts) {
+      if (current && current.children && current.children[part]) {
+        current = current.children[part];
+      } else {
+        return null;
+      }
+    }
+    
+    return current;
   };
 
   const getLanguageFromFile = (fileName: string): string => {
     const extension = fileName?.split('.').pop()?.toLowerCase();
-    return extension === 'py' ? 'Python' : 'JavaScript';
+    
+    switch (extension) {
+      case 'py':
+        return 'Python';
+      case 'java':
+        return 'Java';
+      case 'cpp':
+      case 'cxx':
+      case 'cc':
+        return 'C++';
+      case 'c':
+        return 'C';
+      case 'go':
+        return 'Go';
+      case 'rs':
+        return 'Rust';
+      case 'js':
+      case 'jsx':
+        return 'JavaScript';
+      case 'ts':
+      case 'tsx':
+        return 'TypeScript';
+      default:
+        return 'Text';
+    }
   };
 
   return (
@@ -56,9 +123,12 @@ const Terminal: React.FC<TerminalProps> = ({
         
         <div className="flex items-center gap-2">
           {currentFile && (
-            <span className="text-xs text-gray-400">
-              {getLanguageFromFile(currentFile)}
-            </span>
+            <div className="flex items-center gap-1">
+              <Code className="w-3 h-3 text-gray-400" />
+              <span className="text-xs text-gray-400">
+                {getLanguageFromFile(currentFile)}
+              </span>
+            </div>
           )}
           <button
             onClick={handleExecute}
@@ -92,15 +162,20 @@ const Terminal: React.FC<TerminalProps> = ({
         {output.length === 0 ? (
           <div className="text-gray-500">
             <p>Terminal ready. Select a file and click "Run" to execute code.</p>
-            <p className="mt-2 text-xs">Supported languages: JavaScript (.js), Python (.py)</p>
+            <p className="mt-2 text-xs">
+              Supported languages: JavaScript (.js), Python (.py), Java (.java), 
+              C++ (.cpp), C (.c), Go (.go), Rust (.rs)
+            </p>
           </div>
         ) : (
           output.map((line, index) => (
             <div key={index} className="mb-1">
-              {line.startsWith('Error:') || line.includes('error') || line.includes('Error') ? (
+              {line.startsWith('Error:') || line.includes('error') || line.includes('Error') || line.includes('Compilation failed') ? (
                 <span className="text-red-400">{line}</span>
               ) : line.includes('Warning') || line.includes('warning') ? (
                 <span className="text-yellow-400">{line}</span>
+              ) : line.includes('Compilation successful') || line.includes('Build successful') ? (
+                <span className="text-green-400">{line}</span>
               ) : (
                 <span>{line}</span>
               )}
