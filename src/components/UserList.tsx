@@ -38,15 +38,10 @@ const UserList: React.FC<UserListProps> = ({ users, currentUserId }) => {
       .substring(0, 2);
   };
 
-  const formatJoinTime = (joinedAt?: Date): string => {
-    if (!joinedAt) return '';
-    const now = new Date();
-    const diff = Math.floor((now.getTime() - joinedAt.getTime()) / 1000);
-    
-    if (diff < 60) return 'Just joined';
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    return `${Math.floor(diff / 3600)}h ago`;
-  };
+  const formatJoinTime = (joinedAt: any) => {
+  const date = joinedAt instanceof Date ? joinedAt : new Date(joinedAt);
+  return date.toLocaleString();
+   };
 
   return (
     <div className="bg-gray-900 text-white p-4 border-l border-gray-700 min-w-64">
